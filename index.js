@@ -178,7 +178,7 @@ const HQ_EMOJIS = {
 const ORG_EMOJIS = {
   colonel: "<:Colonel:1478005729146179645>",
   ltcolonel: "<:Lieutenant_Colonel:1478005839427141744>",
-  major: "<:Major:1478005902702284971>",
+  major: "<:Major:1483774917580296232>",
 };
 
 // =========================
