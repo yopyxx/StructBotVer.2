@@ -24,6 +24,12 @@
  * - /편제추가 부서 선택: 대령 / 중령 / 소령
  * - /편제현황, /찾기 본인만 보이도록(ephemeral) 처리
  *
+ * 추가 반영 사항
+ * - /해임 결과 본인만 보이도록 수정
+ * - /편제추가 시 역할 변경 + 별명 자동 변경
+ * - /해임 시 [대위] (EO) 닉네임으로 자동 변경
+ * - 역할 전체 교체 시 교육참모부/법무교육단 역할은 유지
+ *
  * 필수 환경변수
  * - TOKEN
  * - CLIENT_ID
@@ -32,6 +38,7 @@
  * 필수 권한
  * - Bot > Privileged Gateway Intents > Server Members Intent ON
  * - Manage Roles 권한
+ * - Manage Nicknames 권한
  * - 봇 역할이 부여/제거할 역할보다 위에 있어야 함
  */
 
@@ -102,6 +109,17 @@ function getUserLevel(member) {
 }
 
 // =========================
+// 유지해야 하는 역할
+// =========================
+const EDUCATION_STAFF_ROLE_ID = "1475737964352110703"; // 교육참모부
+const LEGAL_GROUP_ROLE_ID = "1449933125424648263"; // 법무교육단
+
+const PERSISTENT_ROLE_IDS = [
+  EDUCATION_STAFF_ROLE_ID,
+  LEGAL_GROUP_ROLE_ID,
+];
+
+// =========================
 // 해임 후 부여할 역할
 // =========================
 const DISMISS_ROLES = [
@@ -114,6 +132,7 @@ const DISMISS_ROLES = [
 // =========================
 // 부서별 자동 부여 역할
 // /편제추가 시 기존 역할 전부 제거 후 아래 역할만 부여
+// 단, PERSISTENT_ROLE_IDS는 유지
 // =========================
 const DEPT_ASSIGN_ROLES = {
   대령: [
@@ -178,7 +197,7 @@ const HQ_EMOJIS = {
 const ORG_EMOJIS = {
   colonel: "<:Colonel:1478005729146179645>",
   ltcolonel: "<:Lieutenant_Colonel:1478005839427141744>",
-  major: "<:Major:1483774917580296232>",
+  major: "<:Major:1478005902702284971>",
 };
 
 // =========================
@@ -271,7 +290,10 @@ function removeUserFromOrganization(targetId) {
 }
 
 async function replaceMemberRoles(member, roleIds, guild) {
-  const removableRoles = member.roles.cache.filter((role) => role.id !== guild.id);
+  const removableRoles = member.roles.cache.filter(
+    (role) =>
+      role.id !== guild.id && !PERSISTENT_ROLE_IDS.includes(String(role.id))
+  );
 
   if (removableRoles.size > 0) {
     await member.roles.remove(removableRoles);
@@ -290,9 +312,67 @@ function formatMemberLine(memObj, nickname, highlightUserId = null) {
   const isTarget =
     highlightUserId && String(memObj.id) === String(highlightUserId);
 
+  const cleanNickname = sanitizeBaseNickname(nickname || memObj.displayName);
+
   return isTarget
-    ? `**${memObj} / ${nickname} ⭐**`
-    : `${memObj} / ${nickname}`;
+    ? `**${memObj} / ${cleanNickname} ⭐**`
+    : `${memObj} / ${cleanNickname}`;
+}
+
+function sanitizeBaseNickname(raw) {
+  if (!raw) return "";
+  return String(raw)
+    .replace(/^(\[[^\]]+\]\s*|\([^)]+\)\s*)+/g, "")
+    .trim();
+}
+
+function getUnitSuffix(member) {
+  const hasES = member?.roles?.cache?.has(EDUCATION_STAFF_ROLE_ID);
+  const hasLG = member?.roles?.cache?.has(LEGAL_GROUP_ROLE_ID);
+
+  const suffixes = [];
+  if (hasES) suffixes.push("ES");
+  if (hasLG) suffixes.push("LG");
+
+  return suffixes;
+}
+
+function buildOrgNickname(dept, baseNickname, member) {
+  const cleanBase = sanitizeBaseNickname(baseNickname) || member.user.username;
+  const suffixes = getUnitSuffix(member);
+
+  if (dept === "대령") {
+    const unit = ["FE", ...suffixes].join("/");
+    return `[대령] [${unit}] ${cleanBase}`;
+  }
+
+  if (dept === "중령") {
+    const unit = ["PG", ...suffixes].join("/");
+    return `[중령] (${unit}) ${cleanBase}`;
+  }
+
+  if (dept === "소령") {
+    const unit = ["PG", ...suffixes].join("/");
+    return `[소령] (${unit}) ${cleanBase}`;
+  }
+
+  return cleanBase;
+}
+
+function buildDismissNickname(member) {
+  const currentName =
+    sanitizeBaseNickname(member.displayName) ||
+    sanitizeBaseNickname(member.user.globalName) ||
+    member.user.username;
+
+  return `[대위] (EO) ${currentName}`;
+}
+
+async function updateMemberNickname(member, newNickname) {
+  if (!newNickname) return;
+  if (member.nickname === newNickname || member.displayName === newNickname) return;
+
+  await member.setNickname(newNickname);
 }
 
 function buildEmbeds(guild, highlightUserId = null) {
@@ -578,21 +658,25 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      const finalNickname = buildOrgNickname(dept, nickname, targetMember);
+
       removeUserFromOrganization(targetUser.id);
 
       store.편제[dept].push({
         id: targetUser.id,
-        nickname,
+        nickname: finalNickname,
       });
 
       const rolesToAssign = DEPT_ASSIGN_ROLES[dept] || [];
 
       await replaceMemberRoles(targetMember, rolesToAssign, guild);
+      await updateMemberNickname(targetMember, finalNickname);
+
       saveData(store);
       await refreshNoticeIfExists(guild);
 
       return interaction.reply({
-        content: `✅ ${targetUser} 님을 ${formatDeptLabel(dept)} 편제에 등록했고, 역할을 새로 적용했습니다.`,
+        content: `✅ ${targetUser} 님을 ${formatDeptLabel(dept)} 편제에 등록했고, 역할 및 별명을 새로 적용했습니다.\n변경 별명: \`${finalNickname}\``,
         ephemeral: true,
       });
     }
@@ -801,23 +885,27 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      const dismissNickname = buildDismissNickname(targetMember);
       const removedFromOrg = removeUserFromOrganization(targetMember.id);
+
       await replaceMemberRoles(targetMember, DISMISS_ROLES, guild);
+      await updateMemberNickname(targetMember, dismissNickname);
+
       saveData(store);
       await refreshNoticeIfExists(guild);
 
       return interaction.reply({
         content: removedFromOrg
-          ? `⚠️ ${targetMember} 해임 처리 완료 (편제 자동 삭제 포함)`
-          : `⚠️ ${targetMember} 해임 처리 완료`,
-        ephemeral: false,
+          ? `⚠️ ${targetMember} 해임 처리 완료 (편제 자동 삭제 포함)\n변경 별명: \`${dismissNickname}\``
+          : `⚠️ ${targetMember} 해임 처리 완료\n변경 별명: \`${dismissNickname}\``,
+        ephemeral: true,
       });
     }
   } catch (err) {
     console.error("명령 처리 중 오류:", err);
 
     const errorMessage =
-      "❌ 처리 중 오류가 발생했습니다. 봇 역할 위치, Manage Roles 권한, 환경변수를 확인해주세요.";
+      "❌ 처리 중 오류가 발생했습니다. 봇 역할 위치, Manage Roles 권한, Manage Nicknames 권한, 환경변수를 확인해주세요.";
 
     if (interaction.deferred || interaction.replied) {
       return interaction.followUp({
