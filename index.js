@@ -23,11 +23,13 @@
  * - 편제현황 임베드 2개 구조
  * - /편제추가 부서 선택: 대령 / 중령 / 소령
  * - /편제현황, /찾기 본인만 보이도록(ephemeral) 처리
- * - /해임 본인만 보이도록(ephemeral) 처리
+ *
+ * 추가 반영
+ * - /해임 결과 본인만 보이도록(ephemeral) 처리
  * - /편제추가 시 역할 + 디스코드 별명 자동 변경
- * - 교육참모부 / 법무교육단 역할은 역할 전체 제거 시에도 유지
- * - 이모지 ID 최신값 반영
- * - 임베드 디자인 고급화
+ * - /해임 시 [대위] (EO) 닉네임으로 자동 변경
+ * - 교육참모부 / 법무교육단 역할은 절대 제거하지 않고 유지
+ * - 이모지는 기존 그대로 유지
  *
  * 필수 환경변수
  * - TOKEN
@@ -38,7 +40,6 @@
  * - Bot > Privileged Gateway Intents > Server Members Intent ON
  * - Manage Roles 권한
  * - Manage Nicknames 권한
- * - Use External Emojis 권한
  * - 봇 역할이 부여/제거할 역할보다 위에 있어야 함
  */
 
@@ -109,16 +110,18 @@ function getUserLevel(member) {
 }
 
 // =========================
-// 색상 설정
+// 보호 역할 / 특수 역할
+// 절대 제거하지 않음
 // =========================
-const COLORS = {
-  HQ: 0x1B2A41,        // 딥 네이비
-  COLONEL: 0xF1C40F,   // 골드
-  LTCOLONEL: 0x3A7BFF, // 코발트 블루
-  MAJOR: 0x1ABC9C,     // 에메랄드/청록
-  NOTICE: 0x2C3E50,    // 공통 안내색
-  ERROR: 0xE74C3C,
+const SPECIAL_ROLE_IDS = {
+  교육참모부: "1475737964352110703",
+  법무교육단: "1449933125424648263",
 };
+
+const PROTECTED_ROLE_IDS = [
+  SPECIAL_ROLE_IDS.교육참모부,
+  SPECIAL_ROLE_IDS.법무교육단,
+];
 
 // =========================
 // 해임 후 부여할 역할
@@ -131,17 +134,9 @@ const DISMISS_ROLES = [
 ];
 
 // =========================
-// 절대 제거하면 안 되는 역할
-// =========================
-const PROTECTED_ROLE_IDS = [
-  "1475737964352110703", // 교육참모부
-  "1449933125424648263", // 법무교육단
-];
-
-// =========================
 // 부서별 자동 부여 역할
 // /편제추가 시 기존 역할 전부 제거 후 아래 역할만 부여
-// 단, PROTECTED_ROLE_IDS는 유지됨
+// 단, 보호 역할은 유지
 // =========================
 const DEPT_ASSIGN_ROLES = {
   대령: [
@@ -200,7 +195,7 @@ const HQ_EMOJIS = {
   인사행정단장: "<:brigadier:1478002619577405500>",
   기획관리단장: "<:brigadier:1478002619577405500>",
   법무관리단장: "<:brigadier:1478002619577405500>",
-  주임원사: "<:majorgeneral:1478002513692065939>",
+  주임원사: "<:sergeantmajor:1478002719645106248>",
 };
 
 const ORG_EMOJIS = {
@@ -299,19 +294,22 @@ function removeUserFromOrganization(targetId) {
 }
 
 async function replaceMemberRoles(member, roleIds, guild) {
-  const removableRoles = member.roles.cache.filter(
-    (role) =>
-      role.id !== guild.id &&
-      !PROTECTED_ROLE_IDS.includes(String(role.id))
-  );
+  const removableRoles = member.roles.cache.filter((role) => {
+    if (role.id === guild.id) return false; // @everyone 유지
+    if (role.managed) return false; // 봇/연동 관리 역할 유지
+    if (PROTECTED_ROLE_IDS.includes(String(role.id))) return false; // 보호 역할 유지
+    return true;
+  });
 
   if (removableRoles.size > 0) {
     await member.roles.remove(removableRoles);
   }
 
-  if (roleIds && roleIds.length > 0) {
-    const finalRoleIds = [...new Set(roleIds)];
-    await member.roles.add(finalRoleIds);
+  const currentRoleIds = new Set(member.roles.cache.map((r) => String(r.id)));
+  const addRoleIds = (roleIds || []).filter((id) => !currentRoleIds.has(String(id)));
+
+  if (addRoleIds.length > 0) {
+    await member.roles.add(addRoleIds);
   }
 }
 
@@ -328,28 +326,69 @@ function formatMemberLine(memObj, nickname, highlightUserId = null) {
     : `${memObj} / ${nickname}`;
 }
 
-function getDeptPrefix(dept) {
-  if (dept === "소령") return "[소령]";
-  if (dept === "중령") return "[중령]";
-  if (dept === "대령") return "[대령]";
-  return `[${dept}]`;
-}
+function extractBaseNickname(rawName) {
+  if (!rawName) return "닉네임";
 
-function buildDeptNickname(member, dept, baseNickname) {
-  const hasES = member.roles.cache.has("1475737964352110703"); // 교육참모부
-  const hasLG = member.roles.cache.has("1449933125424648263"); // 법무교육단
+  let name = String(rawName).trim();
 
-  let groupTag = dept === "대령" ? "[FE]" : "(PG)";
+  // 앞쪽에 붙은 [계급], [부서], (PG), (PG/ES), (EO) 같은 태그 반복 제거
+  for (let i = 0; i < 10; i++) {
+    const next = name
+      .replace(/^\[[^\]]+\]\s*/u, "")
+      .replace(/^\([^)]+\)\s*/u, "")
+      .trim();
 
-  if (hasES && hasLG) {
-    groupTag = dept === "대령" ? "[FE/ES/LG]" : "(PG/ES/LG)";
-  } else if (hasES) {
-    groupTag = dept === "대령" ? "[FE/ES]" : "(PG/ES)";
-  } else if (hasLG) {
-    groupTag = dept === "대령" ? "[FE/LG]" : "(PG/LG)";
+    if (next === name) break;
+    name = next;
   }
 
-  return `${getDeptPrefix(dept)} ${groupTag} ${baseNickname}`;
+  return name || "닉네임";
+}
+
+function getNicknameSuffixByRoles(member) {
+  const hasES = member.roles.cache.has(SPECIAL_ROLE_IDS.교육참모부);
+  const hasLG = member.roles.cache.has(SPECIAL_ROLE_IDS.법무교육단);
+
+  if (hasES && hasLG) return "/ES/LG";
+  if (hasES) return "/ES";
+  if (hasLG) return "/LG";
+  return "";
+}
+
+function buildDeptNickname(dept, baseNickname, member) {
+  const suffix = getNicknameSuffixByRoles(member);
+
+  if (dept === "소령") {
+    return `[소령] (PG${suffix}) ${baseNickname}`;
+  }
+
+  if (dept === "중령") {
+    return `[중령] (PG${suffix}) ${baseNickname}`;
+  }
+
+  if (dept === "대령") {
+    return `[대령] [FE${suffix}] ${baseNickname}`;
+  }
+
+  return baseNickname;
+}
+
+function buildDismissNickname(baseNickname) {
+  return `[대위] (EO) ${baseNickname}`;
+}
+
+async function safeSetNickname(member, nickname) {
+  if (!nickname) return;
+
+  try {
+    if (!member.manageable) {
+      throw new Error("해당 멤버의 별명을 변경할 수 없습니다. 봇 역할 위치를 확인해주세요.");
+    }
+
+    await member.setNickname(nickname);
+  } catch (err) {
+    throw err;
+  }
 }
 
 function buildEmbeds(guild, highlightUserId = null) {
@@ -357,9 +396,8 @@ function buildEmbeds(guild, highlightUserId = null) {
   // 임베드 1 - 사령본부
   // =========================
   const embed1 = new EmbedBuilder()
-    .setColor(COLORS.HQ)
-    .setTitle("🏛️ 사령본부 편제 현황")
-    .setFooter({ text: "Headquarters Organization Status" });
+    .setColor(0x1f3a93)
+    .setTitle("📋 사령본부 편제 현황");
 
   const hqLines = [];
   for (const pos of HQ_POSITIONS) {
@@ -370,16 +408,16 @@ function buildEmbeds(guild, highlightUserId = null) {
       const memObj = guild.members.cache.get(String(member.id));
       if (memObj) {
         const line = formatMemberLine(memObj, member.nickname, highlightUserId);
-        hqLines.push(`${emoji} **${pos}**\n└ ${line}`);
+        hqLines.push(`${emoji} | ${pos} : ${line}`);
       } else {
-        hqLines.push(`${emoji} **${pos}**\n└ 공석`);
+        hqLines.push(`${emoji} | ${pos} : 공석`);
       }
     } else {
-      hqLines.push(`${emoji} **${pos}**\n└ 공석`);
+      hqLines.push(`${emoji} | ${pos} : 공석`);
     }
   }
 
-  embed1.setDescription(hqLines.join("\n\n") || "등록된 사령본부 인원이 없습니다.");
+  embed1.setDescription(["사령본부", ...hqLines].join("\n"));
 
   // =========================
   // 임베드 2 - 재정·인사교육단
@@ -388,43 +426,37 @@ function buildEmbeds(guild, highlightUserId = null) {
   for (const m of store.편제["대령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-    colonelMembers.push(`└ ${formatMemberLine(memObj, m.nickname, highlightUserId)}`);
+    colonelMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
   }
 
   const ltcolonelMembers = [];
   for (const m of store.편제["중령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-    ltcolonelMembers.push(`└ ${formatMemberLine(memObj, m.nickname, highlightUserId)}`);
+    ltcolonelMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
   }
 
   const majorMembers = [];
   for (const m of store.편제["소령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-    majorMembers.push(`└ ${formatMemberLine(memObj, m.nickname, highlightUserId)}`);
+    majorMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
   }
 
   const embed2 = new EmbedBuilder()
-    .setColor(COLORS.NOTICE)
-    .setTitle("🎖️ 재정·인사교육단 편제 현황")
-    .setFooter({ text: "Personnel Organization Status" })
-    .addFields(
-      {
-        name: `${ORG_EMOJIS.colonel} 재정교육단 · 대령 (${store.편제["대령"].length}/${LIMITS["대령"]})`,
-        value: colonelMembers.length > 0 ? colonelMembers.join("\n") : "└ 없음",
-        inline: false,
-      },
-      {
-        name: `${ORG_EMOJIS.ltcolonel} 인사교육단 · 중령 (${store.편제["중령"].length}/${LIMITS["중령"]})`,
-        value: ltcolonelMembers.length > 0 ? ltcolonelMembers.join("\n") : "└ 없음",
-        inline: false,
-      },
-      {
-        name: `${ORG_EMOJIS.major} 인사교육단 · 소령 (${store.편제["소령"].length}/${LIMITS["소령"]})`,
-        value: majorMembers.length > 0 ? majorMembers.join("\n") : "└ 없음",
-        inline: false,
-      }
+    .setColor(0x2ecc71)
+    .setTitle("📋 재정·인사교육단 편제 현황")
+    .setDescription(
+      [
+        `${ORG_EMOJIS.colonel} | 재정교육단 (대령 : ${store.편제["대령"].length}/${LIMITS["대령"]})`,
+        ...(colonelMembers.length > 0 ? colonelMembers : ["없음"]),
+        "",
+        `${ORG_EMOJIS.ltcolonel} | 인사교육단 (중령 : ${store.편제["중령"].length}/${LIMITS["중령"]})`,
+        ...(ltcolonelMembers.length > 0 ? ltcolonelMembers : ["없음"]),
+        "",
+        `${ORG_EMOJIS.major} | 인사교육단 (소령 : ${store.편제["소령"].length}/${LIMITS["소령"]})`,
+        ...(majorMembers.length > 0 ? majorMembers : ["없음"]),
+      ].join("\n")
     );
 
   return [embed1, embed2];
@@ -477,7 +509,7 @@ const commands = [
       opt.setName("대상").setDescription("추가할 멤버").setRequired(true)
     )
     .addStringOption((opt) =>
-      opt.setName("닉네임").setDescription("기준 닉네임").setRequired(true)
+      opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)
     ),
 
   new SlashCommandBuilder()
@@ -599,7 +631,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "편제추가") {
       const dept = interaction.options.getString("부서", true);
       const targetUser = interaction.options.getUser("대상", true);
-      const inputNickname = interaction.options.getString("닉네임", true);
+      const nickname = interaction.options.getString("닉네임", true).trim();
 
       if (userLevel === 0) {
         return interaction.reply({
@@ -642,31 +674,25 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const autoNickname = buildDeptNickname(targetMember, dept, inputNickname);
+      const finalNickname = buildDeptNickname(dept, nickname, targetMember);
 
       removeUserFromOrganization(targetUser.id);
 
       store.편제[dept].push({
         id: targetUser.id,
-        nickname: autoNickname,
+        nickname: finalNickname,
       });
 
       const rolesToAssign = DEPT_ASSIGN_ROLES[dept] || [];
 
       await replaceMemberRoles(targetMember, rolesToAssign, guild);
-
-      await targetMember.setNickname(autoNickname).catch((err) => {
-        console.warn(
-          `⚠️ 별명 변경 실패 (${targetUser.id}):`,
-          err?.message || err
-        );
-      });
+      await safeSetNickname(targetMember, finalNickname);
 
       saveData(store);
       await refreshNoticeIfExists(guild);
 
       return interaction.reply({
-        content: `✅ ${targetUser} 님을 ${formatDeptLabel(dept)} 편제에 등록했고, 역할 및 별명을 적용했습니다.\n변경된 별명: ${autoNickname}`,
+        content: `✅ ${targetUser} 님을 ${formatDeptLabel(dept)} 편제에 등록했고, 역할 및 별명을 적용했습니다.\n변경된 별명: \`${finalNickname}\``,
         ephemeral: true,
       });
     }
@@ -875,15 +901,22 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      const baseNickname = extractBaseNickname(
+        targetMember.nickname || targetUser.username
+      );
+      const dismissNickname = buildDismissNickname(baseNickname);
+
       const removedFromOrg = removeUserFromOrganization(targetMember.id);
       await replaceMemberRoles(targetMember, DISMISS_ROLES, guild);
+      await safeSetNickname(targetMember, dismissNickname);
+
       saveData(store);
       await refreshNoticeIfExists(guild);
 
       return interaction.reply({
         content: removedFromOrg
-          ? `⚠️ ${targetMember} 해임 처리 완료 (편제 자동 삭제 포함)`
-          : `⚠️ ${targetMember} 해임 처리 완료`,
+          ? `⚠️ ${targetMember} 해임 처리 완료 (편제 자동 삭제 포함)\n변경된 별명: \`${dismissNickname}\``
+          : `⚠️ ${targetMember} 해임 처리 완료\n변경된 별명: \`${dismissNickname}\``,
         ephemeral: true,
       });
     }
@@ -891,7 +924,7 @@ client.on("interactionCreate", async (interaction) => {
     console.error("명령 처리 중 오류:", err);
 
     const errorMessage =
-      "❌ 처리 중 오류가 발생했습니다. 봇 역할 위치, Manage Roles 권한, Manage Nicknames 권한, Use External Emojis 권한, 환경변수를 확인해주세요.";
+      "❌ 처리 중 오류가 발생했습니다. 봇 역할 위치, Manage Roles 권한, Manage Nicknames 권한, 환경변수를 확인해주세요.";
 
     if (interaction.deferred || interaction.replied) {
       return interaction.followUp({
