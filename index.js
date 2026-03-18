@@ -26,6 +26,8 @@
  * - /해임 본인만 보이도록(ephemeral) 처리
  * - /편제추가 시 역할 + 디스코드 별명 자동 변경
  * - 교육참모부 / 법무교육단 역할은 역할 전체 제거 시에도 유지
+ * - 이모지 ID 최신값 반영
+ * - 임베드 디자인 고급화
  *
  * 필수 환경변수
  * - TOKEN
@@ -36,6 +38,7 @@
  * - Bot > Privileged Gateway Intents > Server Members Intent ON
  * - Manage Roles 권한
  * - Manage Nicknames 권한
+ * - Use External Emojis 권한
  * - 봇 역할이 부여/제거할 역할보다 위에 있어야 함
  */
 
@@ -104,6 +107,18 @@ function getUserLevel(member) {
 
   return 0;
 }
+
+// =========================
+// 색상 설정
+// =========================
+const COLORS = {
+  HQ: 0x1B2A41,        // 딥 네이비
+  COLONEL: 0xF1C40F,   // 골드
+  LTCOLONEL: 0x3A7BFF, // 코발트 블루
+  MAJOR: 0x1ABC9C,     // 에메랄드/청록
+  NOTICE: 0x2C3E50,    // 공통 안내색
+  ERROR: 0xE74C3C,
+};
 
 // =========================
 // 해임 후 부여할 역할
@@ -185,7 +200,7 @@ const HQ_EMOJIS = {
   인사행정단장: "<:brigadier:1478002619577405500>",
   기획관리단장: "<:brigadier:1478002619577405500>",
   법무관리단장: "<:brigadier:1478002619577405500>",
-  주임원사: "<:sergeantmajor:1478002719645106248>",
+  주임원사: "<:majorgeneral:1478002513692065939>",
 };
 
 const ORG_EMOJIS = {
@@ -342,8 +357,9 @@ function buildEmbeds(guild, highlightUserId = null) {
   // 임베드 1 - 사령본부
   // =========================
   const embed1 = new EmbedBuilder()
-    .setColor(0x1f3a93)
-    .setTitle("📋 사령본부 편제 현황");
+    .setColor(COLORS.HQ)
+    .setTitle("🏛️ 사령본부 편제 현황")
+    .setFooter({ text: "Headquarters Organization Status" });
 
   const hqLines = [];
   for (const pos of HQ_POSITIONS) {
@@ -354,16 +370,16 @@ function buildEmbeds(guild, highlightUserId = null) {
       const memObj = guild.members.cache.get(String(member.id));
       if (memObj) {
         const line = formatMemberLine(memObj, member.nickname, highlightUserId);
-        hqLines.push(`${emoji} | ${pos} : ${line}`);
+        hqLines.push(`${emoji} **${pos}**\n└ ${line}`);
       } else {
-        hqLines.push(`${emoji} | ${pos} : 공석`);
+        hqLines.push(`${emoji} **${pos}**\n└ 공석`);
       }
     } else {
-      hqLines.push(`${emoji} | ${pos} : 공석`);
+      hqLines.push(`${emoji} **${pos}**\n└ 공석`);
     }
   }
 
-  embed1.setDescription(["사령본부", ...hqLines].join("\n"));
+  embed1.setDescription(hqLines.join("\n\n") || "등록된 사령본부 인원이 없습니다.");
 
   // =========================
   // 임베드 2 - 재정·인사교육단
@@ -372,37 +388,43 @@ function buildEmbeds(guild, highlightUserId = null) {
   for (const m of store.편제["대령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-    colonelMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
+    colonelMembers.push(`└ ${formatMemberLine(memObj, m.nickname, highlightUserId)}`);
   }
 
   const ltcolonelMembers = [];
   for (const m of store.편제["중령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-    ltcolonelMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
+    ltcolonelMembers.push(`└ ${formatMemberLine(memObj, m.nickname, highlightUserId)}`);
   }
 
   const majorMembers = [];
   for (const m of store.편제["소령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-    majorMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
+    majorMembers.push(`└ ${formatMemberLine(memObj, m.nickname, highlightUserId)}`);
   }
 
   const embed2 = new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setTitle("📋 재정·인사교육단 편제 현황")
-    .setDescription(
-      [
-        `${ORG_EMOJIS.colonel} | 재정교육단 (대령 : ${store.편제["대령"].length}/${LIMITS["대령"]})`,
-        ...(colonelMembers.length > 0 ? colonelMembers : ["없음"]),
-        "",
-        `${ORG_EMOJIS.ltcolonel} | 인사교육단 (중령 : ${store.편제["중령"].length}/${LIMITS["중령"]})`,
-        ...(ltcolonelMembers.length > 0 ? ltcolonelMembers : ["없음"]),
-        "",
-        `${ORG_EMOJIS.major} | 인사교육단 (소령 : ${store.편제["소령"].length}/${LIMITS["소령"]})`,
-        ...(majorMembers.length > 0 ? majorMembers : ["없음"]),
-      ].join("\n")
+    .setColor(COLORS.NOTICE)
+    .setTitle("🎖️ 재정·인사교육단 편제 현황")
+    .setFooter({ text: "Personnel Organization Status" })
+    .addFields(
+      {
+        name: `${ORG_EMOJIS.colonel} 재정교육단 · 대령 (${store.편제["대령"].length}/${LIMITS["대령"]})`,
+        value: colonelMembers.length > 0 ? colonelMembers.join("\n") : "└ 없음",
+        inline: false,
+      },
+      {
+        name: `${ORG_EMOJIS.ltcolonel} 인사교육단 · 중령 (${store.편제["중령"].length}/${LIMITS["중령"]})`,
+        value: ltcolonelMembers.length > 0 ? ltcolonelMembers.join("\n") : "└ 없음",
+        inline: false,
+      },
+      {
+        name: `${ORG_EMOJIS.major} 인사교육단 · 소령 (${store.편제["소령"].length}/${LIMITS["소령"]})`,
+        value: majorMembers.length > 0 ? majorMembers.join("\n") : "└ 없음",
+        inline: false,
+      }
     );
 
   return [embed1, embed2];
@@ -869,7 +891,7 @@ client.on("interactionCreate", async (interaction) => {
     console.error("명령 처리 중 오류:", err);
 
     const errorMessage =
-      "❌ 처리 중 오류가 발생했습니다. 봇 역할 위치, Manage Roles 권한, Manage Nicknames 권한, 환경변수를 확인해주세요.";
+      "❌ 처리 중 오류가 발생했습니다. 봇 역할 위치, Manage Roles 권한, Manage Nicknames 권한, Use External Emojis 권한, 환경변수를 확인해주세요.";
 
     if (interaction.deferred || interaction.replied) {
       return interaction.followUp({
