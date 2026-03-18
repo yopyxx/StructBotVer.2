@@ -312,9 +312,11 @@ function formatMemberLine(memObj, nickname, highlightUserId = null) {
   const isTarget =
     highlightUserId && String(memObj.id) === String(highlightUserId);
 
+  const cleanNickname = sanitizeBaseNickname(nickname || memObj.displayName);
+
   return isTarget
-    ? `**${memObj} / ${nickname} ⭐**`
-    : `${memObj} / ${nickname}`;
+    ? `**${memObj} / ${cleanNickname} ⭐**`
+    : `${memObj} / ${cleanNickname}`;
 }
 
 function sanitizeBaseNickname(raw) {
