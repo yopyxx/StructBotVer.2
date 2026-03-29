@@ -7,6 +7,9 @@
  * - 권한 검사, 저장/공지 갱신, 응답 처리 중복 제거
  * - 데이터 초기화/보정 로직 정리
  * - 설정값을 한 곳에서 관리하도록 구조화
+ * - 소령/중령/대령 편제 전체추가 명령어 추가
+ * - 표시 닉네임 정리 로직 추가
+ *   예: [중령] (PG/ES) bomboroin -> bomboroin
  */
 
 const fs = require("fs");
@@ -152,6 +155,26 @@ function createDefaultData() {
   };
 }
 
+function sanitizeNickname(nickname) {
+  if (!nickname) return "";
+
+  return String(nickname)
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\([^\)]*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeStoredMember(member) {
+  if (!member || typeof member !== "object") return null;
+
+  return {
+    ...member,
+    id: member.id ? String(member.id) : member.id,
+    nickname: sanitizeNickname(member.nickname || ""),
+  };
+}
+
 function normalizeData(rawData) {
   const base = createDefaultData();
   const data = rawData && typeof rawData === "object" ? rawData : {};
@@ -175,6 +198,23 @@ function normalizeData(rawData) {
     }
   }
 
+  for (const dept of DEPARTMENTS) {
+    normalized.편제[dept] = normalized.편제[dept]
+      .map(normalizeStoredMember)
+      .filter(Boolean);
+  }
+
+  normalized.편제.사령본부 = normalized.편제.사령본부
+    .map((member) => {
+      if (!member || typeof member !== "object") return null;
+      return {
+        ...member,
+        id: member.id ? String(member.id) : member.id,
+        nickname: sanitizeNickname(member.nickname || ""),
+      };
+    })
+    .filter(Boolean);
+
   return normalized;
 }
 
@@ -193,7 +233,7 @@ function loadData() {
 }
 
 function saveData(data) {
-  fs.writeFileSync(CONFIG.dataFile, JSON.stringify(data, null, 2), "utf8");
+  fs.writeFileSync(CONFIG.dataFile, JSON.stringify(normalizeData(data), null, 2), "utf8");
 }
 
 let store = loadData();
@@ -279,9 +319,11 @@ function formatMemberLine(member, nickname, highlightUserId = null) {
   const isHighlighted =
     highlightUserId && String(member.id) === String(highlightUserId);
 
+  const cleanNickname = sanitizeNickname(nickname) || member.displayName;
+
   return isHighlighted
-    ? `**${member} / ${nickname} ⭐**`
-    : `${member} / ${nickname}`;
+    ? `**${member} / ${cleanNickname} ⭐**`
+    : `${member} / ${cleanNickname}`;
 }
 
 function buildHeadquartersEmbed(guild, highlightUserId = null) {
@@ -374,6 +416,7 @@ async function refreshNoticeIfExists(guild) {
 }
 
 async function persistStore(guild) {
+  store = normalizeData(store);
   saveData(store);
   await refreshNoticeIfExists(guild);
 }
@@ -510,7 +553,8 @@ async function registerCommands() {
 async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
   const dept = interaction.options.getString("부서", true);
   const targetUser = interaction.options.getUser("대상", true);
-  const nickname = interaction.options.getString("닉네임", true);
+  const nicknameInput = interaction.options.getString("닉네임", true);
+  const nickname = sanitizeNickname(nicknameInput);
 
   if (userLevel === 0) {
     return replyError(interaction, "❌ 권한이 없습니다.");
@@ -543,8 +587,8 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
 
   removeUserFromOrganization(targetUser.id);
   store.편제[dept].push({
-    id: targetUser.id,
-    nickname,
+    id: String(targetUser.id),
+    nickname: nickname || sanitizeNickname(targetMember.displayName) || targetMember.displayName,
   });
 
   await replaceMemberRoles(targetMember, CONFIG.deptAssignRoles[dept], guild);
@@ -559,7 +603,8 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
 async function handleAddHeadquartersMember({ interaction, guild, userLevel }) {
   const position = interaction.options.getString("직책", true);
   const targetUser = interaction.options.getUser("대상", true);
-  const nickname = interaction.options.getString("닉네임", true);
+  const nicknameInput = interaction.options.getString("닉네임", true);
+  const nickname = sanitizeNickname(nicknameInput);
 
   if (userLevel < 3) {
     return replyError(
@@ -575,7 +620,7 @@ async function handleAddHeadquartersMember({ interaction, guild, userLevel }) {
 
   store.편제.사령본부.push({
     position,
-    id: targetUser.id,
+    id: String(targetUser.id),
     nickname,
   });
 
@@ -733,8 +778,8 @@ async function syncDepartmentMembers(guild, dept) {
       removeUserFromOrganization(member.id);
 
       store.편제[dept].push({
-        id: member.id,
-        nickname: member.displayName,
+        id: String(member.id),
+        nickname: sanitizeNickname(member.displayName) || member.displayName,
       });
 
       await replaceMemberRoles(member, CONFIG.deptAssignRoles[dept], guild);
