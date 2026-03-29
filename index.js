@@ -118,6 +118,21 @@ const CONFIG = {
     ChannelType.PrivateThread,
     ChannelType.AnnouncementThread,
   ]),
+
+  syncRoles: {
+    소령: {
+      include: ["1432005794135802007"],
+      exclude: ["1473698641628631153"],
+    },
+    중령: {
+      include: ["1473698641628631153"],
+      exclude: [],
+    },
+    대령: {
+      include: ["1440692062465953884"],
+      exclude: [],
+    },
+  },
 };
 
 const DEPARTMENTS = Object.keys(CONFIG.limits);
@@ -462,6 +477,18 @@ function buildCommands() {
       .addUserOption((option) =>
         option.setName("대상").setDescription("해임할 유저").setRequired(true)
       ),
+
+    new SlashCommandBuilder()
+      .setName("소령편제전체추가")
+      .setDescription("소령 역할 보유자를 전부 소령 편제에 추가합니다. (중령 역할 보유자 제외)"),
+
+    new SlashCommandBuilder()
+      .setName("중령편제전체추가")
+      .setDescription("중령 역할 보유자를 전부 중령 편제에 추가합니다."),
+
+    new SlashCommandBuilder()
+      .setName("대령편제전체추가")
+      .setDescription("대령 역할 보유자를 전부 대령 편제에 추가합니다."),
   ].map((command) => command.toJSON());
 }
 
@@ -668,6 +695,131 @@ async function handleDismissMember({ interaction, guild, userLevel }) {
   );
 }
 
+function hasAllRoles(member, roleIds = []) {
+  if (!member?.roles?.cache) return false;
+  return roleIds.every((roleId) => member.roles.cache.has(String(roleId)));
+}
+
+function hasAnyRole(member, roleIds = []) {
+  if (!member?.roles?.cache) return false;
+  return roleIds.some((roleId) => member.roles.cache.has(String(roleId)));
+}
+
+function getSyncTargetMembers(guild, dept) {
+  const syncConfig = CONFIG.syncRoles[dept];
+  if (!syncConfig) return [];
+
+  return guild.members.cache.filter((member) => {
+    if (member.user.bot) return false;
+    if (!hasAllRoles(member, syncConfig.include)) return false;
+    if (hasAnyRole(member, syncConfig.exclude)) return false;
+    return true;
+  });
+}
+
+async function syncDepartmentMembers(guild, dept) {
+  const targetMembers = [...getSyncTargetMembers(guild, dept).values()];
+
+  let addedCount = 0;
+  let updatedCount = 0;
+  let failedCount = 0;
+
+  for (const member of targetMembers) {
+    try {
+      const alreadyInSameDept = store.편제[dept].some(
+        (saved) => String(saved.id) === String(member.id)
+      );
+
+      removeUserFromOrganization(member.id);
+
+      store.편제[dept].push({
+        id: member.id,
+        nickname: member.displayName,
+      });
+
+      await replaceMemberRoles(member, CONFIG.deptAssignRoles[dept], guild);
+
+      if (alreadyInSameDept) {
+        updatedCount += 1;
+      } else {
+        addedCount += 1;
+      }
+    } catch (error) {
+      failedCount += 1;
+      console.error(`${dept} 편제 전체추가 실패:`, member.id, error);
+    }
+  }
+
+  await persistStore(guild);
+
+  return {
+    total: targetMembers.length,
+    addedCount,
+    updatedCount,
+    failedCount,
+  };
+}
+
+async function handleBulkAddMajor({ interaction, guild, userLevel }) {
+  if (userLevel < 1) {
+    return replyError(interaction, "❌ 대령 이상만 사용 가능합니다.");
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const result = await syncDepartmentMembers(guild, "소령");
+
+  return reply(interaction, {
+    content:
+      `✅ 소령 편제 전체추가 완료\n` +
+      `대상: ${result.total}명\n` +
+      `신규 추가: ${result.addedCount}명\n` +
+      `기존 갱신: ${result.updatedCount}명\n` +
+      `실패: ${result.failedCount}명`,
+    ephemeral: true,
+  });
+}
+
+async function handleBulkAddLtColonel({ interaction, guild, userLevel }) {
+  if (userLevel < 2) {
+    return replyError(interaction, "❌ 사령본부 이상만 사용 가능합니다.");
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const result = await syncDepartmentMembers(guild, "중령");
+
+  return reply(interaction, {
+    content:
+      `✅ 중령 편제 전체추가 완료\n` +
+      `대상: ${result.total}명\n` +
+      `신규 추가: ${result.addedCount}명\n` +
+      `기존 갱신: ${result.updatedCount}명\n` +
+      `실패: ${result.failedCount}명`,
+    ephemeral: true,
+  });
+}
+
+async function handleBulkAddColonel({ interaction, guild, userLevel }) {
+  if (userLevel < 2) {
+    return replyError(interaction, "❌ 사령본부 이상만 사용 가능합니다.");
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const result = await syncDepartmentMembers(guild, "대령");
+
+  return reply(interaction, {
+    content:
+      `✅ 대령 편제 전체추가 완료\n` +
+      `대상: ${result.total}명\n` +
+      `신규 추가: ${result.addedCount}명\n` +
+      `기존 갱신: ${result.updatedCount}명\n` +
+      `실패: ${result.failedCount}명`,
+    ephemeral: true,
+  });
+}
+
 const commandHandlers = {
   편제추가: handleAddOrganizationMember,
   사령본부추가: handleAddHeadquartersMember,
@@ -677,6 +829,9 @@ const commandHandlers = {
   공지: handleCreateNotice,
   공지수정: handleUpdateNotice,
   해임: handleDismissMember,
+  소령편제전체추가: handleBulkAddMajor,
+  중령편제전체추가: handleBulkAddLtColonel,
+  대령편제전체추가: handleBulkAddColonel,
 };
 
 const client = new Client({
