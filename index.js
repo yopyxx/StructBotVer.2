@@ -1,15 +1,22 @@
 // @ts-nocheck
 /**
- * Discord.js v14 - 편제(조직표) 관리 봇 최적화 버전
+ * Discord.js v14 - 편제(조직표) 관리 봇 최종본
  *
- * 주요 개선점
- * - 명령어별 핸들러 분리
- * - 권한 검사, 저장/공지 갱신, 응답 처리 중복 제거
- * - 데이터 초기화/보정 로직 정리
- * - 설정값을 한 곳에서 관리하도록 구조화
- * - 소령/중령/대령 편제 전체추가 명령어 추가
- * - 표시 닉네임 정리 로직 추가
+ * 주요 기능
+ * - 편제추가 / 편제삭제 / 편제현황 / 찾기
+ * - 사령본부추가
+ * - 공지 / 공지수정
+ * - 해임
+ * - 소령편제전체추가 / 중령편제전체추가 / 대령편제전체추가
+ * - 닉네임 정리 로직 적용
  *   예: [중령] (PG/ES) bomboroin -> bomboroin
+ *
+ * 추가 반영 사항
+ * - 역할 ID 최신값 반영
+ * - level 권한 역할 최신값 반영
+ * - 빠지면 안 되는 역할 2개 유지
+ * - 전체추가 시 필수 역할(1434909470106058842) 없거나 서버에 없으면 자동 제외
+ * - 기존 편제 인원도 전체추가 시 조건 미달이면 자동 정리
  */
 
 const fs = require("fs");
@@ -36,48 +43,55 @@ const CONFIG = {
   ]),
 
   levelRoles: {
-    1: ["1440692062465953884"], // 대령
-    2: ["1432003250810388610"], // 사령본부
-    3: [
-      "1432002835264045147",
-      "1458110231287435417",
-    ], // 최고권한
+    1: ["1489031147022450921"],
+    2: ["1489031132854095944"],
+    3: ["1432002835264045147"],
   },
 
+  // 해임 시 부여할 역할
   dismissRoles: [
     "1432007526337089546",
-    "1432006421523988664",
+    "1489031175816351754",
     "1432006106800197665",
     "1432005822237380659",
   ],
 
   deptAssignRoles: {
-    대령: [
-      "1440692062465953884",
-      "1443933530135461908",
-      "1434909470106058842",
-      "1432006106800197665",
-      "1432006421523988664",
+    소령: [
       "1432007526337089546",
+      "1489031175816351754",
+      "1432006106800197665",
+      "1434909470106058842",
+      "1489031154689638581",
+      "1432005794135802007",
     ],
     중령: [
-      "1432005794135802007",
-      "1473698641628631153",
-      "1443933530135461908",
-      "1434909470106058842",
-      "1432006106800197665",
-      "1432006421523988664",
       "1432007526337089546",
+      "1489031175816351754",
+      "1432006106800197665",
+      "1434909470106058842",
+      "1489031154689638581",
+      "1489031153330688040",
+      "1432005794135802007",
     ],
-    소령: [
-      "1432005794135802007",
-      "1443933530135461908",
-      "1434909470106058842",
-      "1432006106800197665",
-      "1432006421523988664",
+    대령: [
       "1432007526337089546",
+      "1489031175816351754",
+      "1432006106800197665",
+      "1434909470106058842",
+      "1489031154689638581",
+      "1489031147022450921",
     ],
   },
+
+  // 역할 교체 시 절대 제거되면 안 되는 역할
+  protectedRoles: [
+    "1475737964352110703",
+    "1449933125424648263",
+  ],
+
+  // 전체추가 / 검증 시 반드시 있어야 하는 역할
+  requiredOrgRole: "1434909470106058842",
 
   hqPositions: [
     "교육사령관",
@@ -125,14 +139,14 @@ const CONFIG = {
   syncRoles: {
     소령: {
       include: ["1432005794135802007"],
-      exclude: ["1473698641628631153"],
+      exclude: ["1489031153330688040", "1489031147022450921"],
     },
     중령: {
-      include: ["1473698641628631153"],
-      exclude: [],
+      include: ["1489031153330688040"],
+      exclude: ["1489031147022450921"],
     },
     대령: {
-      include: ["1440692062465953884"],
+      include: ["1489031147022450921"],
       exclude: [],
     },
   },
@@ -233,7 +247,11 @@ function loadData() {
 }
 
 function saveData(data) {
-  fs.writeFileSync(CONFIG.dataFile, JSON.stringify(normalizeData(data), null, 2), "utf8");
+  fs.writeFileSync(
+    CONFIG.dataFile,
+    JSON.stringify(normalizeData(data), null, 2),
+    "utf8"
+  );
 }
 
 let store = loadData();
@@ -304,7 +322,14 @@ function removeUserFromOrganization(targetId) {
 }
 
 async function replaceMemberRoles(member, roleIds, guild) {
-  const removableRoles = member.roles.cache.filter((role) => role.id !== guild.id);
+  const protectedRoleSet = new Set([
+    String(guild.id),
+    ...CONFIG.protectedRoles.map(String),
+  ]);
+
+  const removableRoles = member.roles.cache.filter(
+    (role) => !protectedRoleSet.has(String(role.id))
+  );
 
   if (removableRoles.size > 0) {
     await member.roles.remove(removableRoles);
@@ -523,7 +548,7 @@ function buildCommands() {
 
     new SlashCommandBuilder()
       .setName("소령편제전체추가")
-      .setDescription("소령 역할 보유자를 전부 소령 편제에 추가합니다. (중령 역할 보유자 제외)"),
+      .setDescription("소령 역할 보유자를 전부 소령 편제에 추가합니다."),
 
     new SlashCommandBuilder()
       .setName("중령편제전체추가")
@@ -550,6 +575,23 @@ async function registerCommands() {
   console.log("✅ 길드 슬래시 명령어 등록 완료");
 }
 
+function hasAllRoles(member, roleIds = []) {
+  if (!member?.roles?.cache) return false;
+  return roleIds.every((roleId) => member.roles.cache.has(String(roleId)));
+}
+
+function hasAnyRole(member, roleIds = []) {
+  if (!member?.roles?.cache) return false;
+  return roleIds.some((roleId) => member.roles.cache.has(String(roleId)));
+}
+
+function isValidOrgMember(member) {
+  if (!member) return false;
+  if (!member.roles?.cache) return false;
+  if (!member.roles.cache.has(String(CONFIG.requiredOrgRole))) return false;
+  return true;
+}
+
 async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
   const dept = interaction.options.getString("부서", true);
   const targetUser = interaction.options.getUser("대상", true);
@@ -563,7 +605,7 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
   if (userLevel === 1 && dept !== "소령") {
     return replyError(
       interaction,
-      "❌ 대령 권한은 소령 편제만 추가 가능합니다."
+      "❌ Level 1 권한은 소령 편제만 추가 가능합니다."
     );
   }
 
@@ -574,6 +616,13 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
   const targetMember = await fetchMember(guild, targetUser.id);
   if (!targetMember) {
     return replyError(interaction, "❌ 대상 멤버를 찾을 수 없습니다.");
+  }
+
+  if (!targetMember.roles.cache.has(String(CONFIG.requiredOrgRole))) {
+    return replyError(
+      interaction,
+      `❌ 대상 유저는 필수 역할(<@&${CONFIG.requiredOrgRole}>)이 없어 편제에 추가할 수 없습니다.`
+    );
   }
 
   const currentDeptMembers = store.편제[dept];
@@ -588,7 +637,10 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
   removeUserFromOrganization(targetUser.id);
   store.편제[dept].push({
     id: String(targetUser.id),
-    nickname: nickname || sanitizeNickname(targetMember.displayName) || targetMember.displayName,
+    nickname:
+      nickname ||
+      sanitizeNickname(targetMember.displayName) ||
+      targetMember.displayName,
   });
 
   await replaceMemberRoles(targetMember, CONFIG.deptAssignRoles[dept], guild);
@@ -613,6 +665,11 @@ async function handleAddHeadquartersMember({ interaction, guild, userLevel }) {
     );
   }
 
+  const targetMember = await fetchMember(guild, targetUser.id);
+  if (!targetMember) {
+    return replyError(interaction, "❌ 대상 멤버를 찾을 수 없습니다.");
+  }
+
   store.편제.사령본부 = store.편제.사령본부.filter(
     (member) =>
       member.position !== position && String(member.id) !== String(targetUser.id)
@@ -621,7 +678,7 @@ async function handleAddHeadquartersMember({ interaction, guild, userLevel }) {
   store.편제.사령본부.push({
     position,
     id: String(targetUser.id),
-    nickname,
+    nickname: nickname || sanitizeNickname(targetMember.displayName) || targetMember.displayName,
   });
 
   await persistStore(guild);
@@ -632,7 +689,7 @@ async function handleRemoveOrganizationMember({ interaction, guild, userLevel })
   const targetUser = interaction.options.getUser("대상", true);
 
   if (userLevel < 2) {
-    return replyError(interaction, "❌ 사령본부 이상만 사용 가능합니다.");
+    return replyError(interaction, "❌ Level 2 이상만 사용 가능합니다.");
   }
 
   const removed = removeUserFromOrganization(targetUser.id);
@@ -647,7 +704,7 @@ async function handleRemoveOrganizationMember({ interaction, guild, userLevel })
 
 async function handleShowOrganization({ interaction, guild, userLevel }) {
   if (userLevel < 1) {
-    return replyError(interaction, "❌ 대령 이상만 사용 가능합니다.");
+    return replyError(interaction, "❌ Level 1 이상만 사용 가능합니다.");
   }
 
   return reply(interaction, {
@@ -673,7 +730,7 @@ async function handleCreateNotice({ interaction, guild, userLevel }) {
   const channel = interaction.options.getChannel("채널", true);
 
   if (userLevel < 2) {
-    return replyError(interaction, "❌ 사령본부 이상만 공지가 가능합니다.");
+    return replyError(interaction, "❌ Level 2 이상만 공지가 가능합니다.");
   }
 
   if (!canManageNoticeChannel(channel)) {
@@ -719,7 +776,7 @@ async function handleDismissMember({ interaction, guild, userLevel }) {
   const targetUser = interaction.options.getUser("대상", true);
 
   if (userLevel < 2) {
-    return replyError(interaction, "❌ 사령본부 이상만 사용 가능합니다.");
+    return replyError(interaction, "❌ Level 2 이상만 사용 가능합니다.");
   }
 
   const targetMember = await fetchMember(guild, targetUser.id);
@@ -740,29 +797,38 @@ async function handleDismissMember({ interaction, guild, userLevel }) {
   );
 }
 
-function hasAllRoles(member, roleIds = []) {
-  if (!member?.roles?.cache) return false;
-  return roleIds.every((roleId) => member.roles.cache.has(String(roleId)));
-}
-
-function hasAnyRole(member, roleIds = []) {
-  if (!member?.roles?.cache) return false;
-  return roleIds.some((roleId) => member.roles.cache.has(String(roleId)));
-}
-
 function getSyncTargetMembers(guild, dept) {
   const syncConfig = CONFIG.syncRoles[dept];
   if (!syncConfig) return [];
 
   return guild.members.cache.filter((member) => {
     if (member.user.bot) return false;
+    if (!isValidOrgMember(member)) return false;
     if (!hasAllRoles(member, syncConfig.include)) return false;
     if (hasAnyRole(member, syncConfig.exclude)) return false;
     return true;
   });
 }
 
+function pruneInvalidDepartmentMembers(guild, dept) {
+  const before = store.편제[dept].length;
+  const syncConfig = CONFIG.syncRoles[dept];
+
+  store.편제[dept] = store.편제[dept].filter((savedMember) => {
+    const guildMember = guild.members.cache.get(String(savedMember.id));
+    if (!guildMember) return false;
+    if (!isValidOrgMember(guildMember)) return false;
+    if (!syncConfig) return false;
+    if (!hasAllRoles(guildMember, syncConfig.include)) return false;
+    if (hasAnyRole(guildMember, syncConfig.exclude)) return false;
+    return true;
+  });
+
+  return before - store.편제[dept].length;
+}
+
 async function syncDepartmentMembers(guild, dept) {
+  const removedCount = pruneInvalidDepartmentMembers(guild, dept);
   const targetMembers = [...getSyncTargetMembers(guild, dept).values()];
 
   let addedCount = 0;
@@ -802,12 +868,13 @@ async function syncDepartmentMembers(guild, dept) {
     addedCount,
     updatedCount,
     failedCount,
+    removedCount,
   };
 }
 
 async function handleBulkAddMajor({ interaction, guild, userLevel }) {
   if (userLevel < 1) {
-    return replyError(interaction, "❌ 대령 이상만 사용 가능합니다.");
+    return replyError(interaction, "❌ Level 1 이상만 사용 가능합니다.");
   }
 
   await interaction.deferReply({ ephemeral: true });
@@ -820,6 +887,7 @@ async function handleBulkAddMajor({ interaction, guild, userLevel }) {
       `대상: ${result.total}명\n` +
       `신규 추가: ${result.addedCount}명\n` +
       `기존 갱신: ${result.updatedCount}명\n` +
+      `자동 제외: ${result.removedCount}명\n` +
       `실패: ${result.failedCount}명`,
     ephemeral: true,
   });
@@ -827,7 +895,7 @@ async function handleBulkAddMajor({ interaction, guild, userLevel }) {
 
 async function handleBulkAddLtColonel({ interaction, guild, userLevel }) {
   if (userLevel < 2) {
-    return replyError(interaction, "❌ 사령본부 이상만 사용 가능합니다.");
+    return replyError(interaction, "❌ Level 2 이상만 사용 가능합니다.");
   }
 
   await interaction.deferReply({ ephemeral: true });
@@ -840,6 +908,7 @@ async function handleBulkAddLtColonel({ interaction, guild, userLevel }) {
       `대상: ${result.total}명\n` +
       `신규 추가: ${result.addedCount}명\n` +
       `기존 갱신: ${result.updatedCount}명\n` +
+      `자동 제외: ${result.removedCount}명\n` +
       `실패: ${result.failedCount}명`,
     ephemeral: true,
   });
@@ -847,7 +916,7 @@ async function handleBulkAddLtColonel({ interaction, guild, userLevel }) {
 
 async function handleBulkAddColonel({ interaction, guild, userLevel }) {
   if (userLevel < 2) {
-    return replyError(interaction, "❌ 사령본부 이상만 사용 가능합니다.");
+    return replyError(interaction, "❌ Level 2 이상만 사용 가능합니다.");
   }
 
   await interaction.deferReply({ ephemeral: true });
@@ -860,6 +929,7 @@ async function handleBulkAddColonel({ interaction, guild, userLevel }) {
       `대상: ${result.total}명\n` +
       `신규 추가: ${result.addedCount}명\n` +
       `기존 갱신: ${result.updatedCount}명\n` +
+      `자동 제외: ${result.removedCount}명\n` +
       `실패: ${result.failedCount}명`,
     ephemeral: true,
   });
@@ -890,7 +960,10 @@ client.once("ready", async () => {
   console.log(`✅ 로그인 완료: ${client.user.tag}`);
 
   const guild = client.guilds.cache.get(CONFIG.guildId);
-  if (!guild) return;
+  if (!guild) {
+    console.warn("⚠️ 설정된 GUILD_ID의 서버를 찾지 못했습니다.");
+    return;
+  }
 
   try {
     await guild.members.fetch();
