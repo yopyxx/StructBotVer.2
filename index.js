@@ -8,6 +8,7 @@
  * - 빠지면 안 되는 역할 유지 로직 추가
  * - 전체추가 시 서버에 없거나 필수 역할(1434909470106058842) 없으면 자동 제외
  * - 소령/중령/대령 전체추가 기준 역할 변경
+ * - 편제전체추가 명령어는 역할 추가/제거 없이 편제 데이터만 동기화
  */
 
 const fs = require("fs");
@@ -236,7 +237,11 @@ function loadData() {
 }
 
 function saveData(data) {
-  fs.writeFileSync(CONFIG.dataFile, JSON.stringify(normalizeData(data), null, 2), "utf8");
+  fs.writeFileSync(
+    CONFIG.dataFile,
+    JSON.stringify(normalizeData(data), null, 2),
+    "utf8"
+  );
 }
 
 let store = loadData();
@@ -530,15 +535,15 @@ function buildCommands() {
 
     new SlashCommandBuilder()
       .setName("소령편제전체추가")
-      .setDescription("소령 역할 보유자를 전부 소령 편제에 추가합니다."),
+      .setDescription("소령 역할 보유자를 전부 소령 편제에 동기화합니다. (역할 변경 없음)"),
 
     new SlashCommandBuilder()
       .setName("중령편제전체추가")
-      .setDescription("중령 역할 조건 충족자를 전부 중령 편제에 추가합니다."),
+      .setDescription("중령 역할 조건 충족자를 전부 중령 편제에 동기화합니다. (역할 변경 없음)"),
 
     new SlashCommandBuilder()
       .setName("대령편제전체추가")
-      .setDescription("대령 역할 보유자를 전부 대령 편제에 추가합니다."),
+      .setDescription("대령 역할 보유자를 전부 대령 편제에 동기화합니다. (역할 변경 없음)"),
   ].map((command) => command.toJSON());
 }
 
@@ -595,7 +600,10 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
   removeUserFromOrganization(targetUser.id);
   store.편제[dept].push({
     id: String(targetUser.id),
-    nickname: nickname || sanitizeNickname(targetMember.displayName) || targetMember.displayName,
+    nickname:
+      nickname ||
+      sanitizeNickname(targetMember.displayName) ||
+      targetMember.displayName,
   });
 
   await replaceMemberRoles(targetMember, CONFIG.deptAssignRoles[dept], guild);
@@ -825,7 +833,7 @@ async function syncDepartmentMembers(guild, dept) {
         nickname: sanitizeNickname(member.displayName) || member.displayName,
       });
 
-      await replaceMemberRoles(member, CONFIG.deptAssignRoles[dept], guild);
+      // 편제전체추가에서는 역할 변경 안 함
 
       if (alreadyInSameDept) {
         updatedCount += 1;
