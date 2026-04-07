@@ -11,6 +11,8 @@
  * - 편제전체추가 명령어는 역할 추가/제거 없이 편제 데이터만 동기화
  * - 대령 편제 최대 인원 15명으로 변경
  * - 1432002835264045147, 1489031132854095944 역할 보유자는 모든 명령어 사용 가능
+ * - 대령편제전체추가 시 1489031147022450921 역할 보유자는 전부 포함
+ *   (대령은 requiredSyncRole 없어도 포함)
  */
 
 const fs = require("fs");
@@ -773,9 +775,15 @@ function getSyncTargetMembers(guild, dept) {
 
   return guild.members.cache.filter((member) => {
     if (member.user.bot) return false;
-    if (!member.roles.cache.has(CONFIG.requiredSyncRole)) return false;
+
+    // 대령은 requiredSyncRole 없이도 포함
+    if (dept !== "대령") {
+      if (!member.roles.cache.has(CONFIG.requiredSyncRole)) return false;
+    }
+
     if (!hasAllRoles(member, syncConfig.include)) return false;
     if (hasAnyRole(member, syncConfig.exclude)) return false;
+
     return true;
   });
 }
@@ -793,9 +801,11 @@ async function pruneInvalidDepartmentMembers(guild, dept) {
       return false;
     }
 
-    if (!member.roles.cache.has(CONFIG.requiredSyncRole)) {
-      removedCount += 1;
-      return false;
+    if (dept !== "대령") {
+      if (!member.roles.cache.has(CONFIG.requiredSyncRole)) {
+        removedCount += 1;
+        return false;
+      }
     }
 
     if (!hasAllRoles(member, syncConfig.include)) {
