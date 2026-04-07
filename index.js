@@ -9,6 +9,8 @@
  * - 전체추가 시 서버에 없거나 필수 역할(1434909470106058842) 없으면 자동 제외
  * - 소령/중령/대령 전체추가 기준 역할 변경
  * - 편제전체추가 명령어는 역할 추가/제거 없이 편제 데이터만 동기화
+ * - 대령 편제 최대 인원 15명으로 변경
+ * - 1432002835264045147, 1489031132854095944 역할 보유자는 모든 명령어 사용 가능
  */
 
 const fs = require("fs");
@@ -36,8 +38,8 @@ const CONFIG = {
 
   levelRoles: {
     1: ["1489031147022450921"],
-    2: ["1489031132854095944"],
-    3: ["1432002835264045147"],
+    2: [],
+    3: ["1432002835264045147", "1489031132854095944"],
   },
 
   dismissRoles: [
@@ -114,7 +116,7 @@ const CONFIG = {
   },
 
   limits: {
-    대령: 13,
+    대령: 15,
     중령: 28,
     소령: 50,
   },
@@ -832,8 +834,6 @@ async function syncDepartmentMembers(guild, dept) {
         id: String(member.id),
         nickname: sanitizeNickname(member.displayName) || member.displayName,
       });
-
-      // 편제전체추가에서는 역할 변경 안 함
 
       if (alreadyInSameDept) {
         updatedCount += 1;
