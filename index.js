@@ -13,6 +13,8 @@
  * - 1432002835264045147, 1489031132854095944 역할 보유자는 모든 명령어 사용 가능
  * - 대령편제전체추가 시 1489031147022450921 역할 보유자는 전부 포함
  *   (대령은 requiredSyncRole 없어도 포함)
+ * - /편제추가, /사령본부추가 에서 닉네임 옵션 선택 입력으로 변경
+ * - 닉네임 미입력 시 displayName에서 [] / () 내부 문자 제거 후 자동 저장
  */
 
 const fs = require("fs");
@@ -481,7 +483,7 @@ function buildCommands() {
         option.setName("대상").setDescription("추가할 멤버").setRequired(true)
       )
       .addStringOption((option) =>
-        option.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)
+        option.setName("닉네임").setDescription("표기할 닉네임").setRequired(false)
       ),
 
     new SlashCommandBuilder()
@@ -498,7 +500,7 @@ function buildCommands() {
         option.setName("대상").setDescription("배치할 멤버").setRequired(true)
       )
       .addStringOption((option) =>
-        option.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)
+        option.setName("닉네임").setDescription("표기할 닉네임").setRequired(false)
       ),
 
     new SlashCommandBuilder()
@@ -569,8 +571,8 @@ async function registerCommands() {
 async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
   const dept = interaction.options.getString("부서", true);
   const targetUser = interaction.options.getUser("대상", true);
-  const nicknameInput = interaction.options.getString("닉네임", true);
-  const nickname = sanitizeNickname(nicknameInput);
+  const nicknameInput = interaction.options.getString("닉네임", false);
+  const nickname = sanitizeNickname(nicknameInput || "");
 
   if (userLevel === 0) {
     return replyError(interaction, "❌ 권한이 없습니다.");
@@ -601,13 +603,15 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
     return replyError(interaction, "❌ 최대 인원 초과");
   }
 
+  const finalNickname =
+    nickname ||
+    sanitizeNickname(targetMember.displayName) ||
+    targetMember.displayName;
+
   removeUserFromOrganization(targetUser.id);
   store.편제[dept].push({
     id: String(targetUser.id),
-    nickname:
-      nickname ||
-      sanitizeNickname(targetMember.displayName) ||
-      targetMember.displayName,
+    nickname: finalNickname,
   });
 
   await replaceMemberRoles(targetMember, CONFIG.deptAssignRoles[dept], guild);
@@ -622,8 +626,6 @@ async function handleAddOrganizationMember({ interaction, guild, userLevel }) {
 async function handleAddHeadquartersMember({ interaction, guild, userLevel }) {
   const position = interaction.options.getString("직책", true);
   const targetUser = interaction.options.getUser("대상", true);
-  const nicknameInput = interaction.options.getString("닉네임", true);
-  const nickname = sanitizeNickname(nicknameInput);
 
   if (userLevel < 3) {
     return replyError(
@@ -631,6 +633,17 @@ async function handleAddHeadquartersMember({ interaction, guild, userLevel }) {
       "❌ Level 3 이상만 사령본부 수정이 가능합니다."
     );
   }
+
+  const targetMember = await fetchMember(guild, targetUser.id);
+  if (!targetMember) {
+    return replyError(interaction, "❌ 대상 멤버를 찾을 수 없습니다.");
+  }
+
+  const nicknameInput = interaction.options.getString("닉네임", false);
+  const nickname =
+    sanitizeNickname(nicknameInput || "") ||
+    sanitizeNickname(targetMember.displayName) ||
+    targetMember.displayName;
 
   store.편제.사령본부 = store.편제.사령본부.filter(
     (member) =>
